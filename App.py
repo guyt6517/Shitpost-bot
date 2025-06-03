@@ -34,16 +34,21 @@ logger = logging.getLogger(__name__)
 # Tweet timing
 API_TWEET_LIMIT = 17
 SECONDS_IN_DAY = 86400
-tweet_interval = SECONDS_IN_DAY // API_TWEET_LIMIT  # 5082 seconds
+base_interval = SECONDS_IN_DAY // API_TWEET_LIMIT  # 5082 seconds
 TRACK_FILE = "tweet_tracker.json"
 
 # Tweet generator
-categories = ['news', 'editorial', 'reviews', 'religion', 'hobbies', 'lore', 'belles_lettres', 'government', 'learned', 'fiction', 'mystery', 'science_fiction', 'romance', 'humor']
-random_category = random.choice(categories)
-sentences = (
-    sent_tokenize(webtext.raw('overheard.txt')) +
-    sent_tokenize(' '.join(brown.words(categories=random_category)))
-)
+def get_sentences():
+    category = random.choice([
+        'news', 'editorial', 'reviews', 'religion', 'hobbies',
+        'lore', 'belles_lettres', 'government', 'learned',
+        'fiction', 'mystery', 'science_fiction', 'romance', 'humor'])
+    return (
+        sent_tokenize(webtext.raw('overheard.txt')) +
+        sent_tokenize(' '.join(brown.words(categories=category)))
+    )
+
+sentences = get_sentences()
 
 def generate_tweet():
     while True:
@@ -81,33 +86,47 @@ def tweet_loop():
                 "debt": 0
             }
 
-        now = time.time()
-        last_time = tracker.get("last_tweet_time")
-        if last_time is not None:
-            elapsed = now - last_time
-            if elapsed < tweet_interval:
-                wait_time = tweet_interval - elapsed + tracker.get("debt", 0)
-                logger.info(f"[{datetime.utcnow()}] Sleeping {wait_time:.2f} seconds to enforce interval...")
-                time.sleep(wait_time)
-                tracker["debt"] = 0
-            else:
-                tracker["debt"] = max(0, tracker.get("debt", 0) - (elapsed - tweet_interval))
+        now = datetime.utcnow()
+        last_time_str = tracker.get("last_tweet_time")
+        last_time = datetime.strptime(last_time_str, "%Y-%m-%dT%H:%M:%S") if last_time_str else None
+
+        wait_time = base_interval + tracker.get("debt", 0)
+
+        if last_time:
+            elapsed = (now - last_time).total_seconds()
+            if elapsed < wait_time:
+                sleep_time = wait_time - elapsed
+                logger.info(f"Waiting {int(sleep_time)}s before next tweet...")
+                time.sleep(sleep_time)
 
         if tracker['count'] < API_TWEET_LIMIT:
             tweet = generate_tweet()
             payload = {"text": tweet}
             response = requests.post(url, auth=auth, json=payload)
 
+            now = datetime.utcnow()
+
             if response.status_code in [200, 201]:
-                logger.info(f"[{datetime.utcnow()}] [SUCCESS] Tweeted: {tweet}")
+                logger.info(f"[{now}] [SUCCESS] Tweeted: {tweet}")
                 tracker['count'] += 1
-                tracker['last_tweet_time'] = time.time()
+
+                if last_time:
+                    elapsed = (now - last_time).total_seconds()
+                    if elapsed < base_interval:
+                        tracker['debt'] = base_interval - elapsed
+                    else:
+                        tracker['debt'] = 0
+                else:
+                    tracker['debt'] = 0
+
+                tracker['last_tweet_time'] = now.strftime("%Y-%m-%dT%H:%M:%S")
             else:
-                logger.error(f"[{datetime.utcnow()}] [ERROR] Status {response.status_code}: {response.text}")
+                logger.error(f"[{now}] [ERROR] Status {response.status_code}: {response.text}")
+
+            save_tracker(tracker)
         else:
             logger.info(f"[{datetime.utcnow()}] Tweet limit reached for {tracker['date']} ({tracker['count']} tweets). Waiting for next day...")
-
-        save_tracker(tracker)
+            time.sleep(60)
 
 # Flask app
 app = Flask(__name__)
@@ -116,11 +135,12 @@ app = Flask(__name__)
 def home():
     return jsonify({"status": "online"})
 
-@app.before_first_request
 def start_thread():
     thread = threading.Thread(target=tweet_loop)
     thread.daemon = True
     thread.start()
+
+start_thread()
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=10000)
