@@ -48,9 +48,8 @@ def get_sentences():
         sent_tokenize(' '.join(brown.words(categories=category)))
     )
 
-sentences = get_sentences()
-
 def generate_tweet():
+    sentences = get_sentences()
     while True:
         tweet = random.choice(sentences).strip()
         if 20 < len(tweet) < 280 and not tweet.startswith('['):
