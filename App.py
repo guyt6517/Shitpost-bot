@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, jsonify
 import threading
 import time
 import random
@@ -63,6 +63,17 @@ app = Flask(__name__)
 @app.route("/")
 def home():
     return "Shitpost Bot is online."
+
+@app.route("/tweet-now")
+def tweet_now():
+    tweet = generate_tweet()
+    payload = {"text": tweet}
+    response = requests.post(url, auth=auth, json=payload)
+    
+    if response.status_code in [200, 201]:
+        return jsonify({"status": "success", "tweet": tweet})
+    else:
+        return jsonify({"status": "error", "code": response.status_code, "message": response.text})
 
 # Start tweet loop in background
 threading.Thread(target=tweet_loop, daemon=True).start()
