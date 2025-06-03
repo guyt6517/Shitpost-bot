@@ -1,4 +1,3 @@
-import gunicorn
 from flask import Flask, jsonify
 import random
 import nltk
