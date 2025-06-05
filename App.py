@@ -63,7 +63,7 @@ def generate_tweet():
             temperature=0.8,
         )
         tweet = response['choices'][0]['message']['content'].strip()
-        return tweet[:279]  # Trim to max length
+        return tweet[:279]
     except Exception as e:
         logger.error(f"OpenAI tweet generation error: {e}")
         return None
@@ -108,32 +108,40 @@ def tweet_loop():
         if tracker['count'] < API_TWEET_LIMIT:
             tweet = generate_tweet()
             if tweet:
-                payload = {"text": tweet}
-                response = requests.post(url, auth=auth, json=payload)
-                now = datetime.utcnow()
-
-                if response.status_code in [200, 201]:
-                    logger.info(f"[{now}] [SUCCESS] Tweeted: {tweet}")
-                    tracker['count'] += 1
-                    if last_time:
-                        elapsed = (now - last_time).total_seconds()
-                        tracker['debt'] = max(0, base_interval - elapsed)
-                    else:
-                        tracker['debt'] = 0
-                    tracker['last_tweet_time'] = now.strftime("%Y-%m-%dT%H:%M:%S")
-                else:
-                    logger.error(f"[{now}] [ERROR] Status {response.status_code}: {response.text}")
-                save_tracker(tracker)
+                post_tweet(tweet, tracker)
             else:
                 logger.error("Failed to generate tweet; skipping this cycle.")
         else:
             logger.info(f"[{now}] Tweet limit reached for {tracker['date']} ({tracker['count']} tweets). Waiting for next day...")
             time.sleep(60)
 
+def post_tweet(tweet, tracker=None):
+    now = datetime.utcnow()
+    payload = {"text": tweet}
+    response = requests.post(url, auth=auth, json=payload)
+
+    if response.status_code in [200, 201]:
+        logger.info(f"[{now}] [SUCCESS] Tweeted: {tweet}")
+        if tracker is not None:
+            tracker['count'] += 1
+            last_time = datetime.strptime(tracker.get("last_tweet_time"), "%Y-%m-%dT%H:%M:%S") if tracker.get("last_tweet_time") else None
+            if last_time:
+                elapsed = (now - last_time).total_seconds()
+                tracker['debt'] = max(0, base_interval - elapsed)
+            else:
+                tracker['debt'] = 0
+            tracker['last_tweet_time'] = now.strftime("%Y-%m-%dT%H:%M:%S")
+            save_tracker(tracker)
+    else:
+        logger.error(f"[{now}] [ERROR] Status {response.status_code}: {response.text}")
+
 # ==============================
 # Flask App
 # ==============================
 app = Flask(__name__)
+
+def check_auth(req):
+    return req.headers.get("Authorization") == f"Bearer {REPLY_API_TOKEN}"
 
 @app.route("/")
 def home():
@@ -141,7 +149,7 @@ def home():
 
 @app.route("/reply", methods=['POST'])
 def reply():
-    if request.headers.get("Authorization") != f"Bearer {REPLY_API_TOKEN}":
+    if not check_auth(request):
         return jsonify({"error": "Unauthorized"}), 401
 
     data = request.json
@@ -171,8 +179,22 @@ def logs():
 
 @app.route("/env")
 def show_env():
+    if not check_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
     keys = ["OPENAI_API_KEY", "TWITTER_API_KEY", "TWITTER_API_SECRET", "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_SECRET", "REPLY_API_TOKEN"]
     return jsonify({k: os.environ.get(k, "NOT SET") for k in keys})
+
+@app.route("/force-tweet", methods=['POST'])
+def force_tweet():
+    if not check_auth(request):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    tweet = generate_tweet()
+    if not tweet:
+        return jsonify({"error": "Failed to generate tweet"}), 500
+
+    post_tweet(tweet)  # This doesn't update the tracker since it's on-demand
+    return jsonify({"tweet": tweet})
 
 # ==============================
 # Background Thread for Tweeting
