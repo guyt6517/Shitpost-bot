@@ -3,42 +3,54 @@ import time
 import json
 import logging
 import threading
+import io
 from datetime import datetime
-
 import requests
 from requests_oauthlib import OAuth1
 from flask import Flask, jsonify, request
 import openai
 
-# Debug: Print OPENAI_API_KEY presence (Render log)
-print("ENV: OPENAI_API_KEY =", os.environ.get("OPENAI_API_KEY"))
+# ==============================
+# Logging Setup
+# ==============================
+log_buffer = io.StringIO()
+log_handler = logging.StreamHandler(log_buffer)
+log_handler.setLevel(logging.INFO)
+logger = logging.getLogger("App")
+logger.setLevel(logging.INFO)
+logger.addHandler(log_handler)
 
-# Fail early if OpenAI key is missing
+# ==============================
+# Load ENV + OpenAI Key Check
+# ==============================
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 if not openai.api_key:
-    raise ValueError("Missing OpenAI API key in environment variable OPENAI_API_KEY")
+    logger.error("Missing OpenAI API key in environment variable OPENAI_API_KEY")
+    raise ValueError("OPENAI_API_KEY not set")
 
-# Twitter OAuth1 credentials from environment
+logger.info("ENV Check: OPENAI_API_KEY is set")
+
+# Twitter creds from ENV
 api_key = os.environ.get("TWITTER_API_KEY")
 api_secret = os.environ.get("TWITTER_API_SECRET")
 access_token = os.environ.get("TWITTER_ACCESS_TOKEN")
 access_token_secret = os.environ.get("TWITTER_ACCESS_SECRET")
 REPLY_API_TOKEN = os.environ.get("REPLY_API_TOKEN")
 
+# ==============================
 # Constants
+# ==============================
 SYSTEM_PROMPT = "You are @DaggerStriker on Twitter. Write tweets and replies in their style."
 url = 'https://api.twitter.com/2/tweets'
 auth = OAuth1(api_key, api_secret, access_token, access_token_secret)
 TRACK_FILE = "tweet_tracker.json"
 API_TWEET_LIMIT = 17
 SECONDS_IN_DAY = 86400
-base_interval = SECONDS_IN_DAY / API_TWEET_LIMIT  # ~5082 seconds
+base_interval = SECONDS_IN_DAY / API_TWEET_LIMIT  # ~5082 sec
 
-# Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("App")
-
-# Generate a tweet
+# ==============================
+# Tweet Generation
+# ==============================
 def generate_tweet():
     try:
         response = openai.ChatCompletion.create(
@@ -51,12 +63,14 @@ def generate_tweet():
             temperature=0.8,
         )
         tweet = response['choices'][0]['message']['content'].strip()
-        return tweet[:279]  # Trim if needed
+        return tweet[:279]  # Trim to max length
     except Exception as e:
         logger.error(f"OpenAI tweet generation error: {e}")
         return None
 
-# Tracker file management
+# ==============================
+# Tracker
+# ==============================
 def load_tracker():
     if not os.path.exists(TRACK_FILE):
         return {"date": str(datetime.utcnow().date()), "count": 0, "last_tweet_time": None, "debt": 0}
@@ -67,7 +81,9 @@ def save_tracker(data):
     with open(TRACK_FILE, 'w') as f:
         json.dump(data, f)
 
-# Tweeting loop
+# ==============================
+# Tweet Loop
+# ==============================
 def tweet_loop():
     while True:
         tracker = load_tracker()
@@ -114,7 +130,9 @@ def tweet_loop():
             logger.info(f"[{now}] Tweet limit reached for {tracker['date']} ({tracker['count']} tweets). Waiting for next day...")
             time.sleep(60)
 
-# Flask app
+# ==============================
+# Flask App
+# ==============================
 app = Flask(__name__)
 
 @app.route("/")
@@ -146,7 +164,19 @@ def reply():
         logger.error(f"OpenAI reply generation error: {e}")
         return jsonify({"error": "Failed to generate reply"}), 500
 
-# Start tweet loop in background
+@app.route("/logs")
+def logs():
+    log_buffer.seek(0)
+    return "<pre>" + log_buffer.read() + "</pre>"
+
+@app.route("/env")
+def show_env():
+    keys = ["OPENAI_API_KEY", "TWITTER_API_KEY", "TWITTER_API_SECRET", "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_SECRET", "REPLY_API_TOKEN"]
+    return jsonify({k: os.environ.get(k, "NOT SET") for k in keys})
+
+# ==============================
+# Background Thread for Tweeting
+# ==============================
 def start_thread():
     thread = threading.Thread(target=tweet_loop)
     thread.daemon = True
