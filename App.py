@@ -1,27 +1,29 @@
 import os
 import time
-import random
 import json
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import requests
 from requests_oauthlib import OAuth1
 from flask import Flask, jsonify, request
 import openai
 
-# Load OpenAI API key from environment
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Debug: Print OPENAI_API_KEY presence (Render log)
+print("ENV: OPENAI_API_KEY =", os.environ.get("OPENAI_API_KEY"))
+
+# Fail early if OpenAI key is missing
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+if not openai.api_key:
+    raise ValueError("Missing OpenAI API key in environment variable OPENAI_API_KEY")
 
 # Twitter OAuth1 credentials from environment
-api_key = os.getenv("TWITTER_API_KEY")
-api_secret = os.getenv("TWITTER_API_SECRET")
-access_token = os.getenv("TWITTER_ACCESS_TOKEN")
-access_token_secret = os.getenv("TWITTER_ACCESS_SECRET")
-
-# Reply API token for security
-REPLY_API_TOKEN = os.getenv("REPLY_API_TOKEN")
+api_key = os.environ.get("TWITTER_API_KEY")
+api_secret = os.environ.get("TWITTER_API_SECRET")
+access_token = os.environ.get("TWITTER_ACCESS_TOKEN")
+access_token_secret = os.environ.get("TWITTER_ACCESS_SECRET")
+REPLY_API_TOKEN = os.environ.get("REPLY_API_TOKEN")
 
 # Constants
 SYSTEM_PROMPT = "You are @DaggerStriker on Twitter. Write tweets and replies in their style."
@@ -49,12 +51,12 @@ def generate_tweet():
             temperature=0.8,
         )
         tweet = response['choices'][0]['message']['content'].strip()
-        return tweet[:279]  # Trim just in case
+        return tweet[:279]  # Trim if needed
     except Exception as e:
         logger.error(f"OpenAI tweet generation error: {e}")
         return None
 
-# Tracker utils
+# Tracker file management
 def load_tracker():
     if not os.path.exists(TRACK_FILE):
         return {"date": str(datetime.utcnow().date()), "count": 0, "last_tweet_time": None, "debt": 0}
@@ -65,7 +67,7 @@ def save_tracker(data):
     with open(TRACK_FILE, 'w') as f:
         json.dump(data, f)
 
-# Tweet loop
+# Tweeting loop
 def tweet_loop():
     while True:
         tracker = load_tracker()
@@ -78,7 +80,6 @@ def tweet_loop():
         now = datetime.utcnow()
         last_time_str = tracker.get("last_tweet_time")
         last_time = datetime.strptime(last_time_str, "%Y-%m-%dT%H:%M:%S") if last_time_str else None
-
         wait_time = base_interval + tracker.get("debt", 0)
 
         if last_time:
